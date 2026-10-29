@@ -1,0 +1,55 @@
+# Plan morning-digest § 3–4. Renders /digest/<night> to one HTML file and deploys only that file to
+# GitHub Pages. The preview is never committed (ADR 0003): run it again with with_marker=false to
+# upload over the same link without the lane marker.
+name: preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      night:
+        description: Night to render (YYYY-MM-DD)
+        default: '2026-10-28'
+        required: true
+      with_marker:
+        description: Show the lane marker (from the LANE_MARKER secret) in the banner
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - name: Render the page
+        env:
+          LANE_MARKER: ${{ inputs.with_marker && secrets.LANE_MARKER || '' }}
+          NIGHT: ${{ inputs.night }}
+          PORT: 8787
+        run: |
+          npx tsx src/server.ts &
+          for i in $(seq 1 30); do curl -fs http://localhost:8787/health >/dev/null && break; sleep 1; done
+          mkdir -p _site
+          curl -fsS "http://localhost:8787/digest/$NIGHT" -o _site/index.html
+          grep -q '<span class="marker">' _site/index.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+          retention-days: 1
+      - id: deployment
+        uses: actions/deploy-pages@v4
